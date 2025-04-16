@@ -1,8 +1,11 @@
 #include "mainwindow.h"
-
 #include <QApplication>
 #include <QLocale>
 #include <QTranslator>
+
+// 引入QT网络编程相关的头文件
+#include <QTcpSocket>
+#include <QHostAddress>
 
 int main(int argc, char *argv[])
 {
