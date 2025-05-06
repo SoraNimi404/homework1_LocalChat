@@ -1,47 +1,97 @@
 import socket
-import threading
-import logging
+import select
+import sys
+import os
+import time
+from daemonize import Daemonize
 
-# è®¾ç½®æ—¥å¿—è®°å½•
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# å®¢æˆ·ç«¯åˆ—è¡¨
-clients = []
-
-def handle_client(client_socket, client_address, clients):
-    try:
+class ChatServer:
+    def __init__(self, host='0.0.0.0', port=12345):
+        self.host = host
+        self.port = port
+        self.server_socket = None
+        self.client_sockets = []
+        self.nicknames = {}
+        
+    def start(self):
+        # ´´½¨·şÎñÆ÷socket
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(5)
+        
+        print(f"·şÎñÆ÷ÒÑÆô¶¯£¬¼àÌı {self.host}:{self.port}")
+        
         while True:
-            message = client_socket.recv(1024).decode('utf-8')
-            if not message:
-                break
-            for c in clients:
-                if c != client_socket:
-                    c.send(message.encode('utf-8'))
-    except Exception as e:
-        logging.error(f"Error handling client {client_address}: {e}")
-    finally:
+            try:
+                # Ê¹ÓÃselect´¦Àí¶àÁ¬½Ó
+                read_sockets, _, exception_sockets = select.select(
+                    [self.server_socket] + self.client_sockets, [], [])
+                
+                for notified_socket in read_sockets:
+                    # ĞÂÁ¬½Ó
+                    if notified_socket == self.server_socket:
+                        client_socket, client_address = self.server_socket.accept()
+                        self.client_sockets.append(client_socket)
+                        print(f"ĞÂÁ¬½ÓÀ´×Ô {client_address}")
+                    # ÒÑÓĞÁ¬½ÓµÄÏûÏ¢
+                    else:
+                        try:
+                            message = notified_socket.recv(1024).decode('utf-8')
+                            if not message:
+                                self.remove_client(notified_socket)
+                                continue
+                                
+                            # ´¦ÀíÏûÏ¢
+                            self.handle_message(notified_socket, message)
+                        except:
+                            self.remove_client(notified_socket)
+                            continue
+                
+                # ´¦ÀíÒì³£socket
+                for notified_socket in exception_sockets:
+                    self.remove_client(notified_socket)
+                    
+            except KeyboardInterrupt:
+                print("·şÎñÆ÷¹Ø±Õ")
+                for client_socket in self.client_sockets:
+                    client_socket.close()
+                self.server_socket.close()
+                sys.exit()
+    
+    def handle_message(self, sender_socket, message):
+        # ´¦ÀíêÇ³ÆÉèÖÃ
+        if message.startswith("/nick "):
+            nickname = message[6:].strip()
+            self.nicknames[sender_socket] = nickname
+            reply = f"ÏµÍ³: ÄãµÄêÇ³ÆÒÑÉèÖÃÎª {nickname}"
+            sender_socket.send(reply.encode('utf-8'))
+            return
+            
+        # ¹ã²¥ÏûÏ¢
+        sender_nick = self.nicknames.get(sender_socket, "ÄäÃû")
+        broadcast_msg = f"{sender_nick}: {message}"
+        
+        for client_socket in self.client_sockets:
+            if client_socket != sender_socket:
+                try:
+                    client_socket.send(broadcast_msg.encode('utf-8'))
+                except:
+                    self.remove_client(client_socket)
+    
+    def remove_client(self, client_socket):
+        if client_socket in self.client_sockets:
+            self.client_sockets.remove(client_socket)
+        if client_socket in self.nicknames:
+            nickname = self.nicknames.pop(client_socket)
+            print(f"{nickname} ÒÑ¶Ï¿ªÁ¬½Ó")
         client_socket.close()
-        clients.remove(client_socket)
-        logging.info(f"Client {client_address} disconnected.")
 
 def main():
-    # daemonize() # å–æ¶ˆæ³¨é‡Šä»¥åœ¨åå°è¿è¡Œ
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_address = ('0.0.0.0', 10000)  # æœåŠ¡å™¨åœ°å€å’Œç«¯å£
-    server_socket.bind(server_address)
-    server_socket.listen(5)
-    logging.info("Server is running and listening for connections...")
+    server = ChatServer()
+    server.start()
 
-    try:
-        while True:
-            client_socket, client_address = server_socket.accept()
-            logging.info(f"New connection from {client_address}")
-            clients.append(client_socket)
-            client_thread = threading.Thread(target=handle_client, args=(client_socket, client_address, clients))
-            client_thread.start()
-    finally:
-        server_socket.close()
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    pid_file = '/tmp/chat_server.pid'
+    daemon = Daemonize(app="chat_server", pid=pid_file, action=main)
+    daemon.start()
